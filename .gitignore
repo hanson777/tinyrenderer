@@ -1,2 +1,4 @@
 build/
 framebuffer.tga
+out/
+.vs/
