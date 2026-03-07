@@ -1,74 +1,17 @@
+#include "model.h"
 #include "tgaimage.h"
-#include <vector>
-#include <fstream>
-#include <string>
-#include <sstream>
 #include <iostream>
+#include <string>
+#include <utility>
+
+constexpr int width = 800;
+constexpr int height = 800;
 
 constexpr TGAColor white = { 255, 255, 255, 255 }; // attention, BGRA order
 constexpr TGAColor green = { 0, 255, 0, 255 };
 constexpr TGAColor red = { 0, 0, 255, 255 };
 constexpr TGAColor blue = { 255, 128, 64, 255 };
 constexpr TGAColor yellow = { 0, 200, 255, 255 };
-
-struct Vertex {
-    float x;
-    float y;
-    float z;
-};
-
-struct Face {
-    uint32_t x;
-    uint32_t y;
-    uint32_t z;
-};
-
-struct Model {
-    std::vector<Vertex> vertices;
-    std::vector<Face> faces;
-};
-
-void loadOBJ(std::string filepath, Model& model) {
-    std::ifstream infile(filepath);
-    std::string line;
-    if (!infile.is_open()) {
-        std::cerr << "error opening file" << std::endl;
-    }
-    exit(1);
-    while (std::getline(infile, line)) {
-        std::cout << line << '\n';
-        if (line[0] == 'v') {
-            line = line.substr(1);
-            std::stringstream stream(line);
-            float value;
-            uint32_t i = 0;
-            Vertex vertex;
-            while (stream >> value) {
-                std::cout << "Value: " << value << '\n';
-                if (i == 0) vertex.x = value;
-                if (i == 1) vertex.y = value;
-                if (i == 2) vertex.z = value;
-            }
-            std::cout << "X: " << vertex.x << '\n';
-            std::cout << "Y: " << vertex.y << '\n';
-            std::cout << "Z: " << vertex.z << '\n';
-            model.vertices.push_back(vertex);
-        }
-        else if (line[0] == 'f') {
-			line = line.substr(1);
-			std::stringstream stream(line);
-			uint32_t value;
-			uint32_t i = 0;
-            Face face;
-			while (stream >> value) {
-				if (i == 0) face.x = value;
-				if (i == 1) face.y = value;
-				if (i == 2) face.z = value;
-			}
-			model.faces.push_back(face);
-        }
-    }
-}
 
 void line(int ax, int ay, int bx, int by, TGAImage& framebuffer, const TGAColor& color) {
     bool steep = std::abs(ax - bx) < std::abs(ay - by);
@@ -89,14 +32,36 @@ void line(int ax, int ay, int bx, int by, TGAImage& framebuffer, const TGAColor&
     }
 }
 
+std::tuple<float, float> viewport_transform(vec3 v) {
+    float x = (v.x + 1) * (width / 2.0f);
+    float y = (v.y + 1) * (height / 2.0f);
+    return std::make_tuple(x, y);
+}
+
 int main(int argc, char** argv) {
-    constexpr int width = 64;
-    constexpr int height = 64;
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " obj/model.obj" << std::endl;
+        return 1;
+    }
+
+    Model model(argv[1]);
     TGAImage framebuffer(width, height, TGAImage::RGB);
+    std::cout << "# Vertices: " << model.nvertices() << std::endl;
+    std::cout << "# Faces: " << model.nfaces() << std::endl;
 
-    Model model;
-    loadOBJ("obj/diablo3_pose/diablo3_pose.obj", model);
+    for (int i = 0; i < model.nfaces(); i++) {
+        auto [ax, ay] = viewport_transform(model.vertices(i, 0));
+        auto [bx, by] = viewport_transform(model.vertices(i, 1));
+        auto [cx, cy] = viewport_transform(model.vertices(i, 2));
+        line(ax, ay, bx, by, framebuffer, red);
+        line(bx, by, cx, cy, framebuffer, red);
+        line(cx, cy, ax, ay, framebuffer, red);
+    }
 
+    for (int i = 0; i < model.nvertices(); i++) {
+        auto [x, y] = viewport_transform(model.vertices(i));
+        framebuffer.set(x, y, white);
+    }
 
     framebuffer.write_tga_file("framebuffer.tga");
     return 0;
