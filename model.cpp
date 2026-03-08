@@ -35,8 +35,8 @@ Model::Model(std::string filepath) {
     }
 }
 
-int Model::nvertices() const { return m_vertices.size(); }
-int Model::nfaces() const { return m_faces.size() / 3; }
+size_t Model::nvertices() const { return m_vertices.size(); }
+size_t Model::nfaces() const { return m_faces.size() / 3; }
 
 vec3 Model::vertices(const int i) const { return m_vertices[i]; }
 

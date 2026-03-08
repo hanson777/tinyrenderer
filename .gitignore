@@ -1,4 +1,4 @@
 build/
-framebuffer.tga
+*.tga
 out/
 .vs/

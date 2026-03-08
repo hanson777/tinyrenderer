@@ -11,8 +11,8 @@ class Model {
 
   public:
     Model(std::string filepath);
-    int nvertices() const;
-    int nfaces() const;
+    size_t nvertices() const;
+    size_t nfaces() const;
     vec3 vertices(const int i) const;
     vec3 vertices(const int i, const int currentVertex) const;
 };
