@@ -1,11 +1,9 @@
 #include "geometry.h"
-#include <fstream>
-#include <sstream>
 #include <string>
 #include <vector>
 
 class Model {
-  public:
+  private:
     std::vector<vec3> m_vertices;
     std::vector<int> m_faces;
 

@@ -1,6 +1,8 @@
 #include "model.h"
 #include <string>
 #include <vector>
+#include <fstream>
+#include <sstream>
 
 Model::Model(std::string filepath) {
     std::ifstream in;
