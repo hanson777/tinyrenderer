@@ -1,5 +1,6 @@
 #include "our_gl.h"
 #include <algorithm>
+#include <array>
 
 mat<4, 4> ModelView, Viewport, Perspective;
 std::vector<double> zbuffer;
