@@ -1,78 +1,79 @@
+#include "our_gl.h"
 #include "model.h"
 #include "tgaimage.h"
 #include <iostream>
 #include <string>
 #include <array>
-#include <algorithm>
+#include <cmath>
+
+extern mat<4,4> ModelView, Perspective; // "OpenGL" state matrices and
+extern std::vector<double> zbuffer;     // the depth buffer
 
 constexpr double PI = 3.14159265358979323846;
 
-constexpr TGAColor white = { 255, 255, 255, 255 }; // BGRA
-constexpr TGAColor green = { 0, 255, 0, 255 };
-constexpr TGAColor red = { 0, 0, 255, 255 };
-constexpr TGAColor blue = { 255, 128, 64, 255 };
-constexpr TGAColor yellow = { 0, 200, 255, 255 };
+constexpr TGAColor white = { {255, 255, 255, 255} }; // BGRA
+constexpr TGAColor green = { {0, 255, 0, 255} };
+constexpr TGAColor red = { {0, 0, 255, 255} };
+constexpr TGAColor blue = { {255, 128, 64, 255 }};
+constexpr TGAColor yellow = {{ 0, 200, 255, 255 }};
 
-mat<4, 4> ModelView, Viewport, Perspective;
+struct PhongShader : IShader {
+	const Model& model;
+	TGAColor color{};
+	std::array<vec3, 3> tri; // triangle in eye coordinates
+	std::array<vec3, 3> norm;
 
-double signed_triangle_area(int ax, int ay, int bx, int by, int cx, int cy) {
-    return 0.5 * ((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
-}
+	PhongShader(const Model& m) : model(m) {}
 
-void lookat(const vec3 eye, const vec3 center, const vec3 up) {
-	vec3 n = normalized(eye - center);
-	vec3 l = normalized(cross(up, n));
-	vec3 m = normalized(cross(n, l));
-	ModelView = mat<4, 4>{ {{l.x,l.y,l.z,0}, {m.x,m.y,m.z,0}, {n.x,n.y,n.z,0}, {0,0,0,1}} } *
-		mat<4, 4>{{{1, 0, 0, -center.x}, { 0,1,0,-center.y }, { 0,0,1,-center.z }, { 0,0,0,1 }}};
-}
+	virtual vec4 vertex(const int face, const int vert) {
+		const auto [x, y, z] = model.vertices(face, vert);                               // current vertex in object coordinates
+		const vec4 gl_Position = ModelView * vec4{x, y, z, 1.};
+		tri[vert] = gl_Position.xyz(); // in eye coordinates
+		const vec3 n = model.normals(face, vert);
+		norm[vert] = (ModelView.invert_transpose() * vec4{n.x, n.y, n.z, 0.}).xyz();
+		return Perspective * gl_Position;                                              // in clip coordinates
+	}
 
-void perspective(const double f) {
-	Perspective = { {{1,0,0,0}, {0,1,0,0}, {0,0,1,0}, {0,0, -1 / f,1}} };
-}
+	std::pair<bool,TGAColor> fragment(const vec3 bar) const override {
+		const auto [A, B, C] = tri;
 
-void viewport(const int x, const int y, const int w, const int h) {
-	Viewport = { {{w / 2., 0, 0, x + w / 2.}, {0, h / 2., 0, y + h / 2.}, {0,0,1,0}, {0,0,0,1}} };
-}
+		constexpr double ambient = 0.3;
 
-void rasterize(const std::array<vec4, 3> clip, std::vector<double>& zbuffer, TGAImage& framebuffer, const TGAColor color) {
-    std::array<vec4, 3> ndc = { clip[0] / clip[0].w, clip[1] / clip[1].w, clip[2] / clip[2].w };
-    std::array<vec2, 3> screen = { (Viewport * ndc[0]).xy(), (Viewport * ndc[1]).xy(), (Viewport * ndc[2]).xy() }; // screen coordinates
+		// diffuse
+		const vec3 n = normalized(bar.x*norm[0] + bar.y*norm[1] + bar.z*norm[2]); // alpha_n = bar.n
+		// const vec3 n = normalized(cross(B-A, C-A));
+		const vec3 l = normalized(vec3{1, 0, 0});
+		const double diffuse = std::max(0.0f, static_cast<float>(n*l));
+		// end diffuse
 
-	mat<3, 3> ABC = { { {screen[0].x, screen[0].y, 1.}, {screen[1].x, screen[1].y, 1.}, {screen[2].x, screen[2].y, 1.} } }; // det = 2x signed area
-	if (ABC.det() < 1) return; // backface culling + discarding triangles that cover less than a pixel
+		// specular
+		const vec3 r = normalized(2*n*(n*l) - l);
+		const vec3 v = normalized(vec3{-1,0,2});
+		const double specular = std::pow(std::max<float>(0.0f, r*v), 32); // last param is the 'shiny' term (e)
+		// end specular
 
-    auto [bbmin_x, bbmax_x] = std::minmax({screen[0].x, screen[1].x, screen[2].x});
-    auto [bbmin_y, bbmax_y] = std::minmax({screen[0].y, screen[1].y, screen[2].y });
+		double intensity = ambient + 0.4*diffuse + 0.9*specular;
+		intensity = std::min(1.0, intensity);
 
-    for (int x = bbmin_x; x <= bbmax_x; x++) {
-        for (int y = bbmin_y; y <= bbmax_y; y++) {
-			vec3 bc = ABC.invert_transpose() * vec3 { static_cast<double>(x), static_cast<double>(y), 1. }; // barycentric coordinates of {x,y} w.r.t the triangle
-			if (bc.x < 0 || bc.y < 0 || bc.z < 0) continue; // negative barycentric coordinate -> the pixel is outside the triangle
-            double z = bc * vec3{ ndc[0].z, ndc[1].z, ndc[2].z };
-            if (z <= zbuffer[x + y * framebuffer.width()]) continue;
-            zbuffer[x + y * framebuffer.width()] = z;
-            framebuffer.set(x, y, color);
-        }
-    }
-}
+		TGAColor c = {
+			{
+				static_cast<uint8_t>(255*intensity), static_cast<uint8_t>(255*intensity),
+	 static_cast<uint8_t>(255*intensity), 255
+			}};
+		return {false, c}; // do not discard the pixel
+	}
+};
 
-void draw_model(Model& model, std::vector<double>& zbuffer, TGAImage& framebuffer) {
+void draw_model(const Model& model, std::vector<double>& zbuffer, TGAImage& framebuffer) {
     std::cout << "Vertices: " << model.nvertices() << '\n';
     std::cout << "Faces: " << model.nfaces() << '\n';
 
-#pragma omp parallel for
+	PhongShader shader(model);
     for (int i = 0; i < model.nfaces(); i++) {
-        std::array<vec4, 3> clip;
-        for (int d : {0, 1, 2}) {
-            vec3 v = model.vertices(i, d);
-            clip[d] = Perspective * ModelView * vec4{ v.x, v.y, v.z, 1. };
-        }
-		TGAColor rnd;
-		for (int c : {0,1,2}) rnd[c] = std::rand() % 255;
-        rasterize(clip, zbuffer, framebuffer, rnd);
+    	Triangle clip = {shader.vertex(i, 0), shader.vertex(i, 1), shader.vertex(i, 2)};
+        rasterize(clip, shader, framebuffer);
     }
-    std::cout << "All pixels drawn...\n";
+    std::cout << "All pixels drawn.\n";
 }
 
 int main(int argc, char** argv) {
@@ -84,17 +85,19 @@ int main(int argc, char** argv) {
 	constexpr vec3 center{ 0,0,0 };  // camera direction
 	constexpr vec3     up{ 0,1,0 };  // camera up vector
 
-	lookat(eye, center, up);                                          // build the ModelView   matrix
-	perspective(norm(eye - center));                                  // build the Perspective matrix
-	viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8); // build the Viewport    matrix
+	lookat(eye, center, up);                                               // build the ModelView   matrix
+	init_perspective(norm(eye - center));                                  // build the Perspective matrix
+	init_viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8); // build the Viewport    matrix
+	init_zbuffer(width, height);
 
-    Model model("obj/diablo3_pose/diablo3_pose.obj");
+    const Model model("obj/diablo3_pose/diablo3_pose.obj");
+	//TGAImage framebuffer(width, height, TGAImage::RGB, {177, 195, 209, 255});
 	TGAImage framebuffer(width, height, TGAImage::RGB);
 
     std::vector<double> zbuffer(width * height, -std::numeric_limits<double>::max());
 
     draw_model(model, zbuffer, framebuffer);
 
-    framebuffer.write_tga_file("framebuffer.tga");
+    assert(framebuffer.write_tga_file("framebuffer.tga"));
     return 0;
 }
