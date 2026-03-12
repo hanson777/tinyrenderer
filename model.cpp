@@ -50,14 +50,14 @@ Model::Model(std::string filename) {
         }
     }
 
-	auto load_texture = [&filename](const std::string suffix, TGAImage& img) {
-		size_t dot = filename.find_last_of(".");
+	auto load_texture = [&filename](const std::string& suffix, TGAImage& img) {
+		const size_t dot = filename.find_last_of(".");
 		if (dot == std::string::npos) return;
-		std::string texfile = filename.substr(0, dot) + suffix;
+		const std::string texfile = filename.substr(0, dot) + suffix;
 		std::cerr << "texture file " << texfile << " loading " << (img.read_tga_file(texfile.c_str()) ? "ok" : "failed") << std::endl;
 		};
     load_texture("_diffuse.tga", diffusemap);
-    load_texture("_nm.tga", normalmap);
+    load_texture("_nm_tangent.tga", normalmap);
     load_texture("_spec.tga", specularmap);
 }
 
