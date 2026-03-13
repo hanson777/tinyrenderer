@@ -87,7 +87,6 @@ void draw_model(const Model& model, TGAImage& framebuffer, const vec4& light_dir
 int main(int argc, char** argv) {
 	// std::cout << "We are all alone on life's journey, held captive by the limitations of human consciousness.\n";
     std::cout << YELLOW << "These cigarettes... have a sweet aftertaste.\nMy life... never had dessert.\n";
-    std::cout << "Are you my dessert... Okkotsu?!\n" << RESET;
 
 	constexpr int width = 800;
 	constexpr int height = 800;
