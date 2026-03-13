@@ -111,10 +111,11 @@ int main(int argc, char** argv) {
 	//draw_model(model, framebuffer);
 
 	const std::vector<Model> models = {
-		Model("obj/african_head/african_head.obj"),
-		Model("obj/african_head/african_head_eye_outer.obj"),
-		Model("obj/african_head/african_head_eye_inner.obj")
+		// Model("obj/african_head/african_head.obj"),
+		// Model("obj/african_head/african_head_eye_outer.obj"),
+		// Model("obj/african_head/african_head_eye_inner.obj")
 		// Model("obj/diablo3_pose/diablo3_pose.obj")
+        Model("obj/floor.obj")
 	 };
 	for (const Model& m : models) draw_model(m, framebuffer, light_dir);
 

@@ -34,6 +34,11 @@ void rasterize(const Triangle& clip, const IShader& shader, TGAImage& framebuffe
     auto [bbmin_x, bbmax_x] = std::minmax({screen[0].x, screen[1].x, screen[2].x});
     auto [bbmin_y, bbmax_y] = std::minmax({screen[0].y, screen[1].y, screen[2].y });
 
+    bbmin_x = std::max<double>(bbmin_x, 0);
+    bbmin_y = std::max<double>(bbmin_y, 0);
+    bbmax_x = std::min<double>(bbmax_x, framebuffer.width() - 1);
+    bbmax_y = std::min<double>(bbmax_y, framebuffer.height() - 1);
+
     for (int x = bbmin_x; x <= bbmax_x; x++) {
         for (int y = bbmin_y; y <= bbmax_y; y++) {
             vec3 bc = ABC.invert_transpose() * vec3 { static_cast<double>(x), static_cast<double>(y), 1. }; // barycentric coordinates of {x,y} w.r.t the triangle
