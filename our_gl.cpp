@@ -37,18 +37,18 @@ void rasterize(const Triangle& clip, const IShader& shader, TGAImage& framebuffe
     bbmin_x = std::max<double>(bbmin_x, 0);
     bbmin_y = std::max<double>(bbmin_y, 0);
     bbmax_x = std::min<double>(bbmax_x, framebuffer.width() - 1);
-    bbmax_y = std::min<double>(bbmax_y, framebuffer.height() - 1);
+	bbmax_y = std::min<double>(bbmax_y, framebuffer.height() - 1);
 
     for (int x = bbmin_x; x <= bbmax_x; x++) {
         for (int y = bbmin_y; y <= bbmax_y; y++) {
-            vec3 bc = ABC.invert_transpose() * vec3 { static_cast<double>(x), static_cast<double>(y), 1. }; // barycentric coordinates of {x,y} w.r.t the triangle
-            if (bc.x < 0 || bc.y < 0 || bc.z < 0) continue;                                                 // negative barycentric coordinate -> the pixel is outside the triangle
-            const double z = bc * vec3{ ndc[0].z, ndc[1].z, ndc[2].z };
-            if (z <= zbuffer[x + y * framebuffer.width()]) continue;                                        // discard fragments that are too deep w.r.t the zbuffer
-            vec3 bc_clip = { bc.x / clip[0].w, bc.y / clip[1].w, bc.z / clip[2].w };                       // perspective-correct interpolation
+            vec3 bc_screen = ABC.invert_transpose() * vec3 { static_cast<double>(x), static_cast<double>(y), 1. }; // barycentric coordinates of {x,y} w.r.t the triangle
+            if (bc_screen.x < 0 || bc_screen.y < 0 || bc_screen.z < 0) continue; // negative barycentric coordinate -> the pixel is outside the triangle
+            const double z = bc_screen * vec3{ ndc[0].z, ndc[1].z, ndc[2].z }; 
+            if (z <= zbuffer[x + y * framebuffer.width()]) continue; // discard fragments that are too deep w.r.t the zbuffer
+            vec3 bc_clip = { bc_screen.x / clip[0].w, bc_screen.y / clip[1].w, bc_screen.z / clip[2].w }; // perspective-correct interpolation
             bc_clip = bc_clip / (bc_clip.x + bc_clip.y + bc_clip.z);
             auto [discard, color] = shader.fragment(bc_clip);
-            if (discard) continue;                                                                          // fragment shader can discard current fragment
+            if (discard) continue; // fragment shader can discard current fragment
             zbuffer[x + y * framebuffer.width()] = z;
             framebuffer.set(x, y, color);
         }

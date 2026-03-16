@@ -6,6 +6,7 @@
 #include <string>
 #include <array>
 #include <cmath>
+#include <algorithm>
 
 #define RESET   "\033[0m"
 #define RED     "\033[31m"
@@ -14,8 +15,24 @@
 #define BLUE    "\033[34m"
 #define BOLD    "\033[1m"
 
-extern mat<4,4> ModelView, Perspective; // "OpenGL" state matrices and
+extern mat<4,4> ModelView, Viewport, Perspective; // "OpenGL" state matrices and
 extern std::vector<double> zbuffer;     // the depth buffer
+std::vector<double> shadowmap;
+
+struct BlankShader : IShader {
+	const Model& model;
+
+	BlankShader(const Model& m) : model(m) {}
+
+	virtual vec4 vertex(const int face, const int vert) {
+		const vec4 gl_Position = ModelView * model.vert(face, vert);
+		return Perspective * gl_Position;
+	}
+
+	std::pair<bool, TGAColor> fragment(const vec3 bar) const override {
+		return { false, {255, 255, 255, 255} };
+	}
+};
 
 struct PhongShader : IShader {
 	const Model& model;
@@ -23,9 +40,12 @@ struct PhongShader : IShader {
 	std::array<vec3, 3> tri; // triangle in eye coordinates
 	std::array<vec3, 3> norm;
 	std::array<vec2, 3> uvs;
-    const vec4 l;
+    vec4 l;
+	mat<4, 4> NM;
 
-	PhongShader(const Model& m, const vec4 light_dir) : model(m), l(normalized(light_dir)) {
+	PhongShader(const Model& m, const vec3 light, mat<4,4> trans) : model(m) {
+		l = normalized((ModelView * vec4{ light.x, light.y, light.z, 0. }));
+		NM = trans;
     }
 
 	virtual vec4 vertex(const int face, const int vert) {
@@ -66,7 +86,23 @@ struct PhongShader : IShader {
 		double specular = sample2D(model.specular(), uv)[0]/255. * std::pow(std::max(r.z, 0.), 35);
 
 		constexpr double ambient = 0.15;
+		//double intensity = std::min(1.0, ambient + diffuse + specular);
+
+		vec3 frag = tri[0] * bar.x + tri[1] * bar.y + tri[2] * bar.z; 
+		//vec4 frag_screen = Viewport * Perspective * vec4{ frag.x, frag.y, frag.z, 1 };
+		 
+		vec4 shadow_coord = NM * vec4{ frag.x, frag.y, frag.z, 1 };
+		   
+		float i = shadow_coord.x / shadow_coord.w;
+		float j = shadow_coord.y / shadow_coord.w;
+		float z = shadow_coord.z / shadow_coord.w;
+
+		int si = std::clamp((int)i, 0, 800 - 1);
+		int sj = std::clamp((int)j, 0, 800 - 1);
+		bool in_shadow = z < shadowmap[si + sj * 800] - 0.005; // bias
+
 		double intensity = std::min(1.0, ambient + diffuse + specular);
+		if (in_shadow) intensity = ambient;
 
 		TGAColor gl_FragColor = sample2D(model.diffuse(), uv);
 		for (const int c : {0, 1, 2}) gl_FragColor[c] = std::min<int>(255, gl_FragColor[c] * intensity);
@@ -74,52 +110,81 @@ struct PhongShader : IShader {
 	}
 };
 
-void draw_model(const Model& model, TGAImage& framebuffer, const vec4& light_dir) {
-    std::cout << model.nverts() << " vertices, " << model.nfaces() << " faces"<< '\n';
-
-	PhongShader shader(model, light_dir);
-    for (int i = 0; i < model.nfaces(); i++) {
-    	Triangle clip = {shader.vertex(i, 0), shader.vertex(i, 1), shader.vertex(i, 2)};
-        rasterize(clip, shader, framebuffer);
-    }
+void drop_zbuffer(std::string filename, std::vector<double>& zbuffer, int width, int height) {
+	TGAImage zimg(width, height, TGAImage::GRAYSCALE, { 0,0,0,0 });
+	double minz = +1000;
+	double maxz = -1000;
+	for (int x = 0; x < width; x++) {
+		for (int y = 0; y < height; y++) {
+			double z = zbuffer[x + y * width];
+			if (z < -100) continue;
+			minz = std::min(z, minz);
+			maxz = std::max(z, maxz);
+		}
+	}
+	for (int x = 0; x < width; x++) {
+		for (int y = 0; y < height; y++) {
+			double z = zbuffer[x + y * width];
+			if (z < -100) continue;
+			z = (z - minz) / (maxz - minz) * 255;
+			zimg.set(x, y, { (uint8_t)z, 255, 255, 255 });
+		}
+	}
+	zimg.write_tga_file(filename);
 }
 
+
 int main(int argc, char** argv) {
-	// std::cout << "We are all alone on life's journey, held captive by the limitations of human consciousness.\n";
-    std::cout << YELLOW << "These cigarettes... have a sweet aftertaste.\nMy life... never had dessert.\n";
+	std::cout << "We are all alone on life's journey, held captive by the limitations of human consciousness.\n";
+	//std::cout << YELLOW << "These cigarettes... have a sweet aftertaste.\nMy life... never had dessert.\n" << RESET;
 
 	constexpr int width = 800;
 	constexpr int height = 800;
 	constexpr vec3    eye{ -1,0,2 }; // camera position
 	constexpr vec3 center{ 0,0,0 };  // camera direction
 	constexpr vec3     up{ 0,1,0 };  // camera up vector
-    constexpr vec4 light_dir{2, 1, 0, 0}; // Cruel Sun
+    constexpr vec3 light{1, 1, 1};   // Cruel Sun
 
-	lookat(eye, center, up);                                               // build the ModelView   matrix
-	init_perspective(norm(eye - center));                                  // build the Perspective matrix
-	init_viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8); // build the Viewport    matrix
-	init_zbuffer(width, height);                                           // populate the zbuffer with -infinity
-	TGAImage framebuffer(width, height, TGAImage::RGB);
+	std::vector<Model> models{
+		Model("obj/diablo3_pose/diablo3_pose.obj"),
+		Model("obj/floor.obj")
+	};
+	TGAImage framebuffer(width, height, TGAImage::RGB, { 177, 195, 209, 255 });
 
-	// std::string modelpath;
-	// std::cout << "Enter model name: ";
-	// std::cin >> modelpath;
-	// const Model model("obj/" + modelpath + "/" + modelpath + ".obj");
-	//TGAImage framebuffer(width, height, TGAImage::RGB, {177, 195, 209, 255});
+	// render from light's perspective
+	lookat(light, center, up);
+	init_perspective(norm(light - center));
+	init_viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8);
+	init_zbuffer(width, height);
+	TGAImage shadow(width, height, TGAImage::RGB);
+	for (const Model& model : models) {
+		BlankShader shader(model);
+		for (int i = 0; i < model.nfaces(); i++) {
+			Triangle clip = { shader.vertex(i, 0), shader.vertex(i, 1), shader.vertex(i, 2) };
+			rasterize(clip, shader, shadow);
+		}
+	}
+	shadowmap = zbuffer;
 
-	//draw_model(model, framebuffer);
+	drop_zbuffer("shadowmap.tga", shadowmap, 800, 800);
 
-	const std::vector<Model> models = {
-		// Model("obj/african_head/african_head.obj"),
-		// Model("obj/african_head/african_head_eye_outer.obj"),
-		// Model("obj/african_head/african_head_eye_inner.obj")
-		// Model("obj/diablo3_pose/diablo3_pose.obj")
-        Model("obj/floor.obj")
-	 };
-	for (const Model& m : models) draw_model(m, framebuffer, light_dir);
+	// render from camera perspective
+	mat<4, 4> M_light = Viewport * Perspective * ModelView;
+	lookat(eye, center, up);
+	init_perspective(norm(eye - center));
+	init_viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8);
+	init_zbuffer(width, height);
+	mat<4, 4> MN = M_light * ModelView.invert();
 
-	bool success = framebuffer.write_tga_file("framebuffer.tga");
-    if (!success) std::cerr << "file write failed";
-    std::cout << GREEN << "Drawing complete.\n" << RESET;
+	for (const Model& model : models) {
+		PhongShader phong(model, light, MN);
+		for (int i = 0; i < model.nfaces(); i++) {
+			Triangle clip = { phong.vertex(i, 0), phong.vertex(i, 1), phong.vertex(i, 2) };
+			rasterize(clip, phong, framebuffer);
+		}
+	}
+
+	framebuffer.write_tga_file("framebuffer.tga");
+
 	return 0;
 }
