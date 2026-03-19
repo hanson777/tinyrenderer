@@ -130,7 +130,7 @@ struct PhongShader : IShader {
         std::mt19937 gen(rd());
         std::uniform_real_distribution<float> dist(0.0, 1.0); // random floats from [0,1)
         vec3 randomVec = vec3{dist(gen), dist(gen), dist(gen)};
-        float radius = .3;
+        float radius = .4;
         float occlusion = 0.;
         vec3 tangent = normalized(randomVec - n * (randomVec * n));
         vec3 bitangent = cross(n, tangent);
@@ -138,7 +138,6 @@ struct PhongShader : IShader {
 
         for (int i = 0; i < m_kernel.size(); i++) {
             vec3 samplePos = tbn * m_kernel[i]; // tangent normal to view-space
-            // samplePos = frag + (samplePos * radius);
             vec4 clip = Perspective * vec4{samplePos.x, samplePos.y, samplePos.z, 1.}; // view -> clip
             vec4 ndc = clip; // perspective divide
             ndc.x = ndc.x / ndc.w;
@@ -155,7 +154,6 @@ struct PhongShader : IShader {
             occlusion += (sampleDepth >= samplePos.z + 0.005 ? 1. : 0.) * rangeCheck;
         }
         occlusion = 1. - (occlusion / m_kernel.size());
-        // std::cout << "Occlusion: " << occlusion << std::endl;
 
 		vec4 shadow_coord = NM * vec4{ frag.x, frag.y, frag.z, 1 };
 		   
@@ -167,13 +165,12 @@ struct PhongShader : IShader {
 		int sj = std::clamp((int)j, 0, 800 - 1);
 		bool in_shadow = z < shadowmap[si + sj * 800] - 0.005; // bias
 
-        // ambient *= occlusion;
+        ambient *= occlusion;
 		double intensity = std::min(1.0, ambient + diffuse + specular);
 		if (in_shadow) intensity = ambient;
 
-		// TGAColor gl_FragColor = sample2D(model.diffuse(), uv);
-        TGAColor gl_FragColor = {{255, 255, 255, 255 }};
-		for (const int c : {0, 1, 2}) gl_FragColor[c] = std::min<int>(255, gl_FragColor[c] * occlusion);
+		TGAColor gl_FragColor = sample2D(model.diffuse(), uv);
+		for (const int c : {0, 1, 2}) gl_FragColor[c] = std::min<int>(255, gl_FragColor[c] * intensity);
 		return {false, gl_FragColor}; // do not discard the pixel
 	}
 };
@@ -203,26 +200,20 @@ void drop_zbuffer(std::string filename, std::vector<double>& zbuffer, int width,
 
 
 int main(int argc, char** argv) {
-	std::cout << "We are all alone on life's journey, held captive by the limitations of human consciousness.\n";
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " obj/model.obj" << std::endl;
+        return 1;
+    }	
+
+    std::cout << "We are all alone on life's journey, held captive by the limitations of human consciousness.\n";
 	//std::cout << YELLOW << "These cigarettes... have a sweet aftertaste.\nMy life... never had dessert.\n" << RESET;
 
-	constexpr int width = 800;
+	constexpr int width = 800; // image size
 	constexpr int height = 800;
 	constexpr vec3    eye{ -1,0,2 }; // camera position
 	constexpr vec3 center{ 0,0,0 };  // camera direction
 	constexpr vec3     up{ 0,1,0 };  // camera up vector
     constexpr vec3 light{1, 1, 1};   // light position 
-
-	std::vector<Model> models{
-		Model("obj/diablo3_pose/diablo3_pose.obj"),
-		Model("obj/floor.obj"),
-        // Model("obj/african_head/african_head.obj"),
-        // Model("obj/african_head/african_head_eye_inner.obj"),
-        // Model("obj/african_head/african_head_eye_outer.obj"),
-        // Model("obj/boggie/body.obj"),
-        // Model("obj/boggie/eyes.obj"),
-        // Model("obj/boggie/head.obj")
-	};
 	TGAImage framebuffer(width, height, TGAImage::RGB, { 177, 195, 209, 255 });
 
 	// render from light's perspective
@@ -231,7 +222,8 @@ int main(int argc, char** argv) {
 	init_viewport(width / 16, height / 16, width * 7 / 8, height * 7 / 8);
 	init_zbuffer(width, height);
 	TGAImage shadow(width, height, TGAImage::RGB);
-	for (const Model& model : models) {
+	for (int i = 0; i < argc; i++) {
+        Model model(argv[i]);
 		BlankShader shader(model);
 		for (int i = 0; i < model.nfaces(); i++) {
 			Triangle clip = { shader.vertex(i, 0), shader.vertex(i, 1), shader.vertex(i, 2) };
@@ -250,7 +242,8 @@ int main(int argc, char** argv) {
 	init_zbuffer(width, height);
 	mat<4, 4> MN = M_light * ModelView.invert();
 
-	for (const Model& model : models) {
+	for (int i = 0; i < argc; i++) {
+        Model model(argv[i]);
 		PhongShader phong(model, light, MN);
 		for (int i = 0; i < model.nfaces(); i++) {
 			Triangle clip = { phong.vertex(i, 0), phong.vertex(i, 1), phong.vertex(i, 2) };
