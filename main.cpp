@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <algorithm>
+#include <random>
 
 #define RESET   "\033[0m"
 #define RED     "\033[31m"
@@ -18,6 +19,23 @@
 extern mat<4,4> ModelView, Viewport, Perspective; // "OpenGL" state matrices and
 extern std::vector<double> zbuffer;     // the depth buffer
 std::vector<double> shadowmap;
+
+float lerp(float a, float b, float t) {
+    return a + t * (b-a);
+}
+
+float clamp(float x, float lowerlimit = 0.0f, float upperlimit = 1.0f) {
+  if (x < lowerlimit) return lowerlimit;
+  if (x > upperlimit) return upperlimit;
+  return x;
+}
+
+float smoothstep (float edge0, float edge1, float x) {
+   // Scale, and clamp x to 0..1 range
+   x = clamp((x - edge0) / (edge1 - edge0));
+
+   return x * x * (3.0f - 2.0f * x);
+}
 
 struct BlankShader : IShader {
 	const Model& model;
@@ -85,12 +103,55 @@ struct PhongShader : IShader {
 		const vec4 r = normalized(2*n_world*(n_world*l) - l);
 		double specular = sample2D(model.specular(), uv)[0]/255. * std::pow(std::max(r.z, 0.), 35);
 
-		constexpr double ambient = 0.15;
-		//double intensity = std::min(1.0, ambient + diffuse + specular);
+		double ambient = 0.15;
 
-		vec3 frag = tri[0] * bar.x + tri[1] * bar.y + tri[2] * bar.z; 
-		//vec4 frag_screen = Viewport * Perspective * vec4{ frag.x, frag.y, frag.z, 1 };
-		 
+        vec3 frag = tri[0] * bar.x + tri[1] * bar.y + tri[2] * bar.z; 
+        // std::cout << "fragPos: " << frag << "\n";
+
+        int sampleSize = 128;
+        std::random_device rd; // gives us the seed when we call rd() 
+        std::mt19937 gen(rd());
+        std::uniform_real_distribution<float> dist(0.0, 1.0); // random floats from [0,1)
+        std::vector<vec3> kernel(sampleSize);
+        vec3 randomVec = vec3{dist(gen), dist(gen), dist(gen)};
+
+        for (int i = 0; i < sampleSize; i++) {
+            vec3 sample{ dist(gen) * 2. - 1., dist(gen) * 2. - 1., dist(gen) };
+            sample = normalized(sample);
+            sample = sample * dist(gen);
+            float scale = (float)i / sampleSize;
+            scale = lerp(.1, 1., scale * scale);
+            sample = sample * scale;
+            kernel.push_back(sample);
+        }
+
+        float radius = .3;
+        float occlusion = 0.;
+        vec3 tangent = normalized(randomVec - n * (randomVec * n));
+        vec3 bitangent = cross(n, tangent);
+        mat<3,3> tbn = {tangent, bitangent, n};
+
+        for (int i = 0; i < kernel.size(); i++) {
+            vec3 samplePos = tbn * kernel[i]; // tangent normal to view-space
+            // samplePos = frag + (samplePos * radius);
+            vec4 clip = Perspective * vec4{samplePos.x, samplePos.y, samplePos.z, 1.}; // view -> clip
+            vec4 ndc = clip; // perspective divide
+            ndc.x = ndc.x / ndc.w;
+            ndc.y = ndc.y / ndc.w;
+            ndc.z = ndc.z / ndc.w;
+            ndc.x = ndc.x * 0.5 + 0.5;
+            ndc.y = ndc.y * 0.5 + 0.5;
+            ndc.z = ndc.z * 0.5 + 0.5;
+            vec2 screen = (Viewport * ndc).xy(); // our uv
+            int x = std::clamp((int)(screen.x*800), 0, 800);
+            int y = std::clamp((int)(screen.y*800), 0, 800);
+            double sampleDepth = zbuffer[x + y * 800];
+            float rangeCheck = smoothstep(0., 1., radius / std::abs(frag.z - sampleDepth));
+            occlusion += (sampleDepth >= samplePos.z + 0.005 ? 1. : 0.) * rangeCheck;
+        }
+        occlusion = 1. - (occlusion / kernel.size());
+        // std::cout << "Occlusion: " << occlusion << std::endl;
+
 		vec4 shadow_coord = NM * vec4{ frag.x, frag.y, frag.z, 1 };
 		   
 		float i = shadow_coord.x / shadow_coord.w;
@@ -101,10 +162,12 @@ struct PhongShader : IShader {
 		int sj = std::clamp((int)j, 0, 800 - 1);
 		bool in_shadow = z < shadowmap[si + sj * 800] - 0.005; // bias
 
+        // ambient *= occlusion;
 		double intensity = std::min(1.0, ambient + diffuse + specular);
 		if (in_shadow) intensity = ambient;
 
 		TGAColor gl_FragColor = sample2D(model.diffuse(), uv);
+        // TGAColor gl_FragColor = {{255, 255, 255, 255 }};
 		for (const int c : {0, 1, 2}) gl_FragColor[c] = std::min<int>(255, gl_FragColor[c] * intensity);
 		return {false, gl_FragColor}; // do not discard the pixel
 	}
@@ -143,11 +206,17 @@ int main(int argc, char** argv) {
 	constexpr vec3    eye{ -1,0,2 }; // camera position
 	constexpr vec3 center{ 0,0,0 };  // camera direction
 	constexpr vec3     up{ 0,1,0 };  // camera up vector
-    constexpr vec3 light{1, 1, 1};   // Cruel Sun
+    constexpr vec3 light{1, 1, 1};   // light position 
 
 	std::vector<Model> models{
 		Model("obj/diablo3_pose/diablo3_pose.obj"),
-		Model("obj/floor.obj")
+		Model("obj/floor.obj"),
+        // Model("obj/african_head/african_head.obj"),
+        // Model("obj/african_head/african_head_eye_inner.obj"),
+        // Model("obj/african_head/african_head_eye_outer.obj"),
+        // Model("obj/boggie/body.obj"),
+        // Model("obj/boggie/eyes.obj"),
+        // Model("obj/boggie/head.obj")
 	};
 	TGAImage framebuffer(width, height, TGAImage::RGB, { 177, 195, 209, 255 });
 
@@ -185,6 +254,5 @@ int main(int argc, char** argv) {
 	}
 
 	framebuffer.write_tga_file("framebuffer.tga");
-
 	return 0;
 }
