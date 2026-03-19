@@ -60,10 +60,28 @@ struct PhongShader : IShader {
 	std::array<vec2, 3> uvs;
     vec4 l;
 	mat<4, 4> NM;
+    int m_sampleSize;
+    std::vector<vec3> m_kernel;
 
 	PhongShader(const Model& m, const vec3 light, mat<4,4> trans) : model(m) {
 		l = normalized((ModelView * vec4{ light.x, light.y, light.z, 0. }));
 		NM = trans;
+        int sampleSize = 128;
+        std::random_device rd; // gives us the seed when we call rd() 
+        std::mt19937 gen(rd());
+        std::uniform_real_distribution<float> dist(0.0, 1.0); // random floats from [0,1)
+        std::vector<vec3> kernel(sampleSize);
+        for (int i = 0; i < sampleSize; i++) {
+            vec3 sample{ dist(gen) * 2. - 1., dist(gen) * 2. - 1., dist(gen) };
+            sample = normalized(sample);
+            sample = sample * dist(gen);
+            float scale = (float)i / sampleSize;
+            scale = lerp(.1, 1., scale * scale);
+            sample = sample * scale;
+            kernel.push_back(sample);
+        }
+        m_sampleSize = sampleSize;
+        m_kernel = kernel;
     }
 
 	virtual vec4 vertex(const int face, const int vert) {
@@ -108,31 +126,18 @@ struct PhongShader : IShader {
         vec3 frag = tri[0] * bar.x + tri[1] * bar.y + tri[2] * bar.z; 
         // std::cout << "fragPos: " << frag << "\n";
 
-        int sampleSize = 128;
         std::random_device rd; // gives us the seed when we call rd() 
         std::mt19937 gen(rd());
         std::uniform_real_distribution<float> dist(0.0, 1.0); // random floats from [0,1)
-        std::vector<vec3> kernel(sampleSize);
         vec3 randomVec = vec3{dist(gen), dist(gen), dist(gen)};
-
-        for (int i = 0; i < sampleSize; i++) {
-            vec3 sample{ dist(gen) * 2. - 1., dist(gen) * 2. - 1., dist(gen) };
-            sample = normalized(sample);
-            sample = sample * dist(gen);
-            float scale = (float)i / sampleSize;
-            scale = lerp(.1, 1., scale * scale);
-            sample = sample * scale;
-            kernel.push_back(sample);
-        }
-
         float radius = .3;
         float occlusion = 0.;
         vec3 tangent = normalized(randomVec - n * (randomVec * n));
         vec3 bitangent = cross(n, tangent);
         mat<3,3> tbn = {tangent, bitangent, n};
 
-        for (int i = 0; i < kernel.size(); i++) {
-            vec3 samplePos = tbn * kernel[i]; // tangent normal to view-space
+        for (int i = 0; i < m_kernel.size(); i++) {
+            vec3 samplePos = tbn * m_kernel[i]; // tangent normal to view-space
             // samplePos = frag + (samplePos * radius);
             vec4 clip = Perspective * vec4{samplePos.x, samplePos.y, samplePos.z, 1.}; // view -> clip
             vec4 ndc = clip; // perspective divide
@@ -149,7 +154,7 @@ struct PhongShader : IShader {
             float rangeCheck = smoothstep(0., 1., radius / std::abs(frag.z - sampleDepth));
             occlusion += (sampleDepth >= samplePos.z + 0.005 ? 1. : 0.) * rangeCheck;
         }
-        occlusion = 1. - (occlusion / kernel.size());
+        occlusion = 1. - (occlusion / m_kernel.size());
         // std::cout << "Occlusion: " << occlusion << std::endl;
 
 		vec4 shadow_coord = NM * vec4{ frag.x, frag.y, frag.z, 1 };
@@ -166,9 +171,9 @@ struct PhongShader : IShader {
 		double intensity = std::min(1.0, ambient + diffuse + specular);
 		if (in_shadow) intensity = ambient;
 
-		TGAColor gl_FragColor = sample2D(model.diffuse(), uv);
-        // TGAColor gl_FragColor = {{255, 255, 255, 255 }};
-		for (const int c : {0, 1, 2}) gl_FragColor[c] = std::min<int>(255, gl_FragColor[c] * intensity);
+		// TGAColor gl_FragColor = sample2D(model.diffuse(), uv);
+        TGAColor gl_FragColor = {{255, 255, 255, 255 }};
+		for (const int c : {0, 1, 2}) gl_FragColor[c] = std::min<int>(255, gl_FragColor[c] * occlusion);
 		return {false, gl_FragColor}; // do not discard the pixel
 	}
 };
